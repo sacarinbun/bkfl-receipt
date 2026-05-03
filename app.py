@@ -51,20 +51,22 @@ EN_MONTHS = {
 }
 MDR_RATES = {'SCB_OOM': 0.0268, 'KBANK': 0.0257, 'BAY': 0.0214, 'SCB_DOEN': 0.0}
 
-fill_scb_doen = PatternFill('solid', fgColor='D4AAFF')
-fill_scb_oom  = PatternFill('solid', fgColor='BDD7EE')
-fill_kbank    = PatternFill('solid', fgColor='C6EFCE')
-fill_bay      = PatternFill('solid', fgColor='FFEB9C')
+fill_scb_doen = PatternFill('solid', fgColor='D4AAFF')   # ม่วง
+fill_scb_oom  = PatternFill('solid', fgColor='BDD7EE')   # น้ำเงินอ่อน
+fill_kbank    = PatternFill('solid', fgColor='C6EFCE')   # เขียว
+fill_bay      = PatternFill('solid', fgColor='FFEB9C')   # เหลือง
 BANK_FILL     = {'SCB_DOEN': fill_scb_doen, 'SCB_OOM': fill_scb_oom,
                  'KBANK': fill_kbank, 'BAY': fill_bay}
+
+BANK_ICON = {'SCB_DOEN': '🟪', 'SCB_OOM': '🟦', 'KBANK': '🟩', 'BAY': '🟨'}
 
 SKIP_CODES = '{"A00","A01","A02","A03","A04","A05","A06","A07","A08","OGT"}'
 
 PRODUCT_MAP = [
     ('SRH001','ดึงหน้า'),   ('SRH002','ดึงหน้า'),   ('SRH003','ดึงขมับ'),
     ('C2025004','ดึงหน้า'), ('C2025005','ดึงคอ'),   ('C2025006','ดึงคอ'),
-    ('C2026007',''),        # กรอก category ใน BD
-    ('INH001',''),          # กรอก category ใน BD
+    ('C2026007',''),
+    ('INH001',''),
     ('SUB001','ตาสองชั้น'), ('SUB002','ตาสองชั้น'), ('SUB003','ตาสองชั้น'),
     ('SUB004','ตาสองชั้น'), ('SUB005','ตาสองชั้น'), ('SUB006','ตาสองชั้น'),
     ('SUB007','ตาสองชั้น'), ('SUB008','ตาสองชั้น'),
@@ -155,21 +157,17 @@ def copy_style(src, dst):
 
 def detect_month_from_filename(name):
     """Extract YYYYMM from APSx Thai filename or English folder name."""
-    # Thai: รายงานใบเสร็จ_01_มี.ค._2569 ถึง 31_มี.ค._2569.xlsx
     for th, mm in THAI_MONTHS.items():
-        th_escaped = re.escape(th)
         m = re.search(rf'_(\d{{4}})\s*(?:ถึง|$)', name)
         if th in name and m:
             be_year = int(m.group(1))
             ce_year = be_year - 543
             return f"{ce_year}{mm}"
-    # English: mar2026, dec2025, etc.
     n = name.lower()
     for mon, mm in EN_MONTHS.items():
         m = re.search(rf'{mon}(\d{{4}})', n)
         if m:
             return m.group(1) + mm
-    # Direct YYYYMM
     m = re.search(r'(\d{6})', name)
     if m: return m.group(1)
     return datetime.datetime.now().strftime('%Y%m')
@@ -338,7 +336,6 @@ def auto_match(receipt_items, all_credits):
     return bank_match, unmatched
 
 def parse_override(override_dict):
-    """Parse {RE#_amount: [credit, date, bank]} dict into bank_match format."""
     result = {}
     for key_str, val in override_dict.items():
         parts = key_str.rsplit('_', 1)
@@ -371,6 +368,8 @@ def build_excel(src_bytes, bank_match, yyyymm, unmatched_deposits=None):
     wb_out = Workbook()
     bold = Font(bold=True); hdr_fill = PatternFill('solid', fgColor='D9E1F2')
     xmon_fill = PatternFill('solid', fgColor='FCE4D6'); umn_fill = PatternFill('solid', fgColor='E2EFDA')
+    MONEY_FMT = '#,##0.00'
+    DATE_FMT  = 'DD/MM/YYYY'
 
     # คำนวณ sheet (first)
     ws_c = wb_out.active; ws_c.title = 'คำนวณ'
@@ -418,9 +417,6 @@ def build_excel(src_bytes, bank_match, yyyymm, unmatched_deposits=None):
             ri = i + 3
             ws_c.cell(ri, 61).value = dt; ws_c.cell(ri, 62).value = bank
             ws_c.cell(ri, 63).value = amt; ws_c.cell(ri, 64).value = note
-
-    MONEY_FMT = '#,##0.00'
-    DATE_FMT  = 'DD/MM/YYYY'
 
     matched = 0; unmatched_cells = 0
     for idx, (r_src, row) in enumerate(data_rows):
@@ -496,10 +492,11 @@ def build_excel(src_bytes, bank_match, yyyymm, unmatched_deposits=None):
     sum_row = dend + 3
     ws_c.cell(sum_row, 23).value = 'SUM ยอดชำระ →'; ws_c.cell(sum_row, 23).font = bold
     ws_c.cell(sum_row, 24).value = f'=SUM(X3:X{dend+1})'
-    ws_c.cell(sum_row, 24).font = bold; ws_c.cell(sum_row, 24).number_format = '#,##0.00'
+    ws_c.cell(sum_row, 24).font = bold; ws_c.cell(sum_row, 24).number_format = MONEY_FMT
     ws_c.cell(sum_row, 31).value = 'SUM เงินเข้าบัญชี →'; ws_c.cell(sum_row, 31).font = bold
     ws_c.cell(sum_row, 32).value = f'=SUM(AF3:AF{dend+1})'
-    ws_c.cell(sum_row, 32).font = bold; ws_c.cell(sum_row, 32).number_format = '#,##0.00'
+    ws_c.cell(sum_row, 32).font = bold; ws_c.cell(sum_row, 32).number_format = MONEY_FMT
+
     for cl, w in [('A',14),('B',14),('C',12),('G',12),('H',14),('L',12),('V',30),('X',12),
                   ('AD',15),('AE',13),('AF',14),('AG',13),('AH',16),('AI',13),('AJ',12),
                   ('AL',13),('AM',12),('AO',13),('AP',8),('AY',14),('AZ',18)]:
@@ -636,7 +633,7 @@ with col2:
     if bank_files:
         for f in bank_files:
             btype = detect_bank_type(f.name)
-            icon = {'SCB_DOEN':'🟪','SCB_OOM':'🟦','KBANK':'🟩','BAY':'🟨'}.get(btype,'⬜')
+            icon = BANK_ICON.get(btype, '⬜')
             st.write(f"{icon} **{btype or 'ไม่รู้จัก'}** — {f.name}")
 
 # ── SECTION 2: MANUAL OVERRIDE ────────────────────────────────────────────────
@@ -660,7 +657,6 @@ if process_btn and apsx_file:
     apsx_bytes = apsx_file.read()
     yyyymm = detect_month_from_filename(apsx_file.name)
 
-    # Parse override
     override_dict = {}
     if override_text and override_text.strip():
         try:
@@ -669,7 +665,6 @@ if process_btn and apsx_file:
         except Exception as e:
             st.error(f"JSON parse error: {e}")
 
-    # Parse bank PDFs
     all_credits = []
     with st.spinner("Parsing bank PDFs..."):
         for bf in (bank_files or []):
@@ -685,11 +680,11 @@ if process_btn and apsx_file:
             try:
                 credits = parser(tmp_path)
                 all_credits.extend(credits)
-               st.write(f"  {['🟪','🟦','🟩','🟨'][list(PARSERS).index(btype)]} {btype}: {len(credits)} credit entries")
+                icon = BANK_ICON.get(btype, '⬜')
+                st.write(f"  {icon} {btype}: {len(credits)} credit entries")
             finally:
                 os.unlink(tmp_path)
 
-    # Analyze source for receipt list
     with st.spinner("Analyzing APSx source..."):
         wb_tmp = load_workbook(io.BytesIO(apsx_bytes), data_only=True)
         ws_tmp = wb_tmp.active
@@ -704,20 +699,17 @@ if process_btn and apsx_file:
             if re_num and y_val and y_val > 0:
                 receipt_items.append((re_num, y_val, pay_ch))
 
-    # Auto-match + override
     bank_match, unmatched = auto_match(receipt_items, all_credits)
     override_parsed = parse_override(override_dict)
     bank_match.update(override_parsed)
     unmatched_final = [u for u in unmatched if (u['re'], u['amount']) not in bank_match]
 
-    # Build Excel
     with st.spinner("Building Excel output..."):
         out_bytes, matched, blank, total_rows, cont_rows = build_excel(
             apsx_bytes, bank_match, yyyymm)
 
     out_name = f"{yyyymm}_BKFL_Receipt Report.xlsx"
 
-    # ── RESULTS ──
     st.header("3. ผลลัพธ์")
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Data rows", total_rows)
