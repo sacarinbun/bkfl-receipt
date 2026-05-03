@@ -274,6 +274,16 @@ PARSERS = {'SCB_DOEN': lambda p: parse_scb(p,'SCB_DOEN'),
 # CORE PROCESSOR
 # ─────────────────────────────────────────────────────────────────────────────
 
+def detect_apsx_cols(ws, hdr_row):
+    """Auto-detect APSx column indices from header row names."""
+    prod_col = 12; chan_col = 22; amt_col = 24  # March defaults
+    for c in range(1, ws.max_column + 1):
+        v = str(ws.cell(hdr_row, c).value or '').strip()
+        if v == 'รหัส':            prod_col = c
+        elif v == 'ช่องทางชำระ':  chan_col = c
+        elif v == 'ยอดชำระ':      amt_col  = c
+    return prod_col, chan_col, amt_col
+
 def analyze_source(ws):
     merged_a = {}
     for m in ws.merged_cells.ranges:
@@ -353,6 +363,9 @@ def build_excel(src_bytes, bank_match, yyyymm, unmatched_deposits=None):
     wb_src = load_workbook(io.BytesIO(src_bytes), data_only=True)
     ws_src = wb_src.active
     _, hdr, dstart, dend = analyze_source(ws_src)
+    prod_col, chan_col, amt_col = detect_apsx_cols(ws_src, hdr)
+    prod_ltr = get_column_letter(prod_col)
+    amt_ltr  = get_column_letter(amt_col)
     mr, cont_rows = build_merge_resolver(ws_src)
     MAP_LAST_ROW = 2 + len(PRODUCT_MAP)
 
@@ -426,16 +439,16 @@ def build_excel(src_bytes, bank_match, yyyymm, unmatched_deposits=None):
         # Col C: date only (no time)
         if isinstance(ws_c.cell(r, 3).value, datetime.datetime):
             ws_c.cell(r, 3).number_format = DATE_FMT
-        # Col X: ยอดชำระ — money format
-        ws_c.cell(r, 24).number_format = MONEY_FMT
+        # ยอดชำระ col — money format (dynamic: follows amt_col)
+        ws_c.cell(r, amt_col).number_format = MONEY_FMT
 
-        re_num  = row[0]         # col A
-        y_val   = pf(row[23])    # col X
-        pay_ch  = row[21]        # col V
+        re_num  = row[0]               # col A
+        y_val   = pf(row[amt_col-1])   # ยอดชำระ (dynamic)
+        pay_ch  = row[chan_col-1]      # ช่องทางชำระ (dynamic)
         is_cont = (r_src in cont_rows)
 
-        ws_c.cell(r, 30).value = (f'=IF(OR(L{r}={SKIP_CODES}),"-",'
-                                   f'IFERROR(VLOOKUP(L{r},$AY$3:$AZ${MAP_LAST_ROW},2,FALSE),""))')
+        ws_c.cell(r, 30).value = (f'=IF(OR({prod_ltr}{r}={SKIP_CODES}),"-",'
+                                   f'IFERROR(VLOOKUP({prod_ltr}{r},$AY$3:$AZ${MAP_LAST_ROW},2,FALSE),""))')
         ws_c.cell(r, 31).value = ''
 
         if is_cont:
@@ -461,7 +474,7 @@ def build_excel(src_bytes, bank_match, yyyymm, unmatched_deposits=None):
                 unmatched_cells += 1
         ws_c.cell(r, 32).number_format = MONEY_FMT
 
-        ws_c.cell(r, 34).value = f'=IF(AE{r}="มัดจำ",0,IF(ISNUMBER(X{r}),X{r},0))'
+        ws_c.cell(r, 34).value = f'=IF(AE{r}="มัดจำ",0,IF(ISNUMBER({amt_ltr}{r}),{amt_ltr}{r},0))'
         ws_c.cell(r, 34).number_format = MONEY_FMT
         ws_c.cell(r, 35).value = ''
         ws_c.cell(r, 36).value = (
@@ -490,9 +503,9 @@ def build_excel(src_bytes, bank_match, yyyymm, unmatched_deposits=None):
         ws_c.cell(r, 45).value = ''
 
     sum_row = dend + 3
-    ws_c.cell(sum_row, 23).value = 'SUM ยอดชำระ →'; ws_c.cell(sum_row, 23).font = bold
-    ws_c.cell(sum_row, 24).value = f'=SUM(X3:X{dend+1})'
-    ws_c.cell(sum_row, 24).font = bold; ws_c.cell(sum_row, 24).number_format = MONEY_FMT
+    ws_c.cell(sum_row, amt_col-1).value = 'SUM ยอดชำระ →'; ws_c.cell(sum_row, amt_col-1).font = bold
+    ws_c.cell(sum_row, amt_col).value = f'=SUM({amt_ltr}3:{amt_ltr}{dend+1})'
+    ws_c.cell(sum_row, amt_col).font = bold; ws_c.cell(sum_row, amt_col).number_format = MONEY_FMT
     ws_c.cell(sum_row, 31).value = 'SUM เงินเข้าบัญชี →'; ws_c.cell(sum_row, 31).font = bold
     ws_c.cell(sum_row, 32).value = f'=SUM(AF3:AF{dend+1})'
     ws_c.cell(sum_row, 32).font = bold; ws_c.cell(sum_row, 32).number_format = MONEY_FMT
@@ -688,14 +701,15 @@ if process_btn and apsx_file:
     with st.spinner("Analyzing APSx source..."):
         wb_tmp = load_workbook(io.BytesIO(apsx_bytes), data_only=True)
         ws_tmp = wb_tmp.active
-        _, _, dstart, dend = analyze_source(ws_tmp)
+        _, hdr_tmp, dstart, dend = analyze_source(ws_tmp)
+        prod_col_ui, chan_col_ui, amt_col_ui = detect_apsx_cols(ws_tmp, hdr_tmp)
         mr_tmp, cont_tmp = build_merge_resolver(ws_tmp)
         def gv(r,c): return mr_tmp.get((r,c), ws_tmp.cell(r,c).value)
 
         receipt_items = []
         for r in range(dstart, dend + 1):
             if r in cont_tmp: continue
-            re_num = gv(r, 1); y_val = pf(gv(r, 24)); pay_ch = gv(r, 22)
+            re_num = gv(r, 1); y_val = pf(gv(r, amt_col_ui)); pay_ch = gv(r, chan_col_ui)
             if re_num and y_val and y_val > 0:
                 receipt_items.append((re_num, y_val, pay_ch))
 
@@ -735,6 +749,9 @@ if process_btn and apsx_file:
             "💡 คัดลอก Key จากตารางด้านบน → วางใน Override box → กด Process อีกครั้ง\n\n"
             "Format: `\"KEY\": [ยอดจริงจาก bank statement, \"YYYY-MM-DD\", \"BANK_TYPE\"]`"
         )
+    elif blank > 0:
+        st.warning(f"⚠ **{blank} รายการ AF/AG ว่าง** — bank PDF ยังไม่ครบ หรือช่องทางชำระไม่ระบุ\n\n"
+                   "ถ้าแน่ใจว่า bank PDF ครบแล้ว ให้ใส่ข้อมูลใน Manual Override")
     else:
         st.success("✅ ทุกรายการ match ครบ (ยกเว้น cash และ cross-month settlements)")
 
