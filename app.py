@@ -685,7 +685,7 @@ if process_btn and apsx_file:
             try:
                 credits = parser(tmp_path)
                 all_credits.extend(credits)
-                st.write(f"  {'🟦🟩🟨🟧'.split()[list(PARSERS).index(btype)]} {btype}: {len(credits)} credit entries")
+                st.write(f"  {['🟦','🟩','🟨','🟧'][list(PARSERS).index(btype)]} {btype}: {len(credits)} credit entries")
             finally:
                 os.unlink(tmp_path)
 
