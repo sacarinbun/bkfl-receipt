@@ -636,7 +636,7 @@ with col2:
     if bank_files:
         for f in bank_files:
             btype = detect_bank_type(f.name)
-            icon = {'SCB_DOEN':'🟦','SCB_OOM':'🟩','KBANK':'🟨','BAY':'🟧'}.get(btype,'⬜')
+            icon = {'SCB_DOEN':'🟪','SCB_OOM':'🟦','KBANK':'🟩','BAY':'🟨'}.get(btype,'⬜')
             st.write(f"{icon} **{btype or 'ไม่รู้จัก'}** — {f.name}")
 
 # ── SECTION 2: MANUAL OVERRIDE ────────────────────────────────────────────────
