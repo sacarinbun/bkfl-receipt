@@ -51,10 +51,10 @@ EN_MONTHS = {
 }
 MDR_RATES = {'SCB_OOM': 0.0268, 'KBANK': 0.0257, 'BAY': 0.0214, 'SCB_DOEN': 0.0}
 
-fill_scb_doen = PatternFill('solid', fgColor=Color(theme=7, tint=0.3999755851924192))
-fill_scb_oom  = PatternFill('solid', fgColor=Color(theme=4, tint=0.5999938962981048))
-fill_kbank    = PatternFill('solid', fgColor=Color(theme=6, tint=0.5999938962981048))
-fill_bay      = PatternFill('solid', fgColor=Color(rgb='FFFFFF00'))
+fill_scb_doen = PatternFill('solid', fgColor='D4AAFF')
+fill_scb_oom  = PatternFill('solid', fgColor='BDD7EE')
+fill_kbank    = PatternFill('solid', fgColor='C6EFCE')
+fill_bay      = PatternFill('solid', fgColor='FFEB9C')
 BANK_FILL     = {'SCB_DOEN': fill_scb_doen, 'SCB_OOM': fill_scb_oom,
                  'KBANK': fill_kbank, 'BAY': fill_bay}
 
