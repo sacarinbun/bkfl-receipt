@@ -324,12 +324,13 @@ def build_merge_resolver(ws):
     return mr, cont
 
 def auto_match(receipt_items, all_credits):
-    bank_match, unmatched = {}, []
+    bank_match, guess_match, unmatched = {}, {}, []
     for re_num, y_val, channel in receipt_items:
         btype = detect_bank_from_channel(channel)
         if btype in (None, 'CASH'): continue
         mdr = MDR_RATES.get(btype, 0)
         expected = float(y_val) * (1 - mdr)
+        # Pass 1: confident match within 4%
         best_idx, best_diff = None, float('inf')
         for i, c in enumerate(all_credits):
             if c['bank'] != btype: continue
@@ -341,9 +342,19 @@ def auto_match(receipt_items, all_credits):
             c = all_credits[best_idx]
             bank_match[(re_num, float(y_val))] = (c['amount'], c['date'], btype)
         else:
+            # Pass 2: best guess — closest entry regardless of tolerance
+            g_idx, g_diff = None, float('inf')
+            for i, c in enumerate(all_credits):
+                if c['bank'] != btype: continue
+                diff = abs(c['amount'] - expected)
+                if diff < g_diff:
+                    g_diff, g_idx = diff, i
+            if g_idx is not None:
+                c = all_credits[g_idx]
+                guess_match[(re_num, float(y_val))] = (c['amount'], c['date'], btype)
             unmatched.append({'re': re_num, 'amount': float(y_val), 'channel': channel,
                               'expected_net': expected, 'bank_type': btype})
-    return bank_match, unmatched
+    return bank_match, guess_match, unmatched
 
 def parse_override(override_dict):
     result = {}
@@ -358,7 +369,7 @@ def parse_override(override_dict):
         except: pass
     return result
 
-def build_excel(src_bytes, bank_match, yyyymm, unmatched_deposits=None):
+def build_excel(src_bytes, bank_match, yyyymm, unmatched_deposits=None, guess_match=None):
     """Build output workbook and return as bytes."""
     wb_src = load_workbook(io.BytesIO(src_bytes), data_only=True)
     ws_src = wb_src.active
@@ -381,8 +392,10 @@ def build_excel(src_bytes, bank_match, yyyymm, unmatched_deposits=None):
     wb_out = Workbook()
     bold = Font(bold=True); hdr_fill = PatternFill('solid', fgColor='D9E1F2')
     xmon_fill = PatternFill('solid', fgColor='FCE4D6'); umn_fill = PatternFill('solid', fgColor='E2EFDA')
+    fill_guess = PatternFill('solid', fgColor='FFC7CE')  # แดงอ่อน = best guess ต้องตรวจสอบ
     MONEY_FMT = '#,##0.00'
     DATE_FMT  = 'DD/MM/YYYY'
+    _guess = guess_match or {}
 
     # คำนวณ sheet (first)
     ws_c = wb_out.active; ws_c.title = 'คำนวณ'
@@ -431,7 +444,7 @@ def build_excel(src_bytes, bank_match, yyyymm, unmatched_deposits=None):
             ws_c.cell(ri, 61).value = dt; ws_c.cell(ri, 62).value = bank
             ws_c.cell(ri, 63).value = amt; ws_c.cell(ri, 64).value = note
 
-    matched = 0; unmatched_cells = 0
+    matched = 0; guessed = 0; unmatched_cells = 0
     for idx, (r_src, row) in enumerate(data_rows):
         r = idx + 3
         for ci, val in enumerate(row, 1): ws_c.cell(r, ci).value = val
@@ -460,7 +473,9 @@ def build_excel(src_bytes, bank_match, yyyymm, unmatched_deposits=None):
         else:
             key = (re_num, float(y_val))
             bm  = bank_match.get(key)
+            gm  = _guess.get(key)
             if bm:
+                # Confident match — bank color fill
                 af, ag, btype = bm
                 ws_c.cell(r, 32).value = af
                 ws_c.cell(r, 32).fill  = BANK_FILL.get(btype, PatternFill())
@@ -469,6 +484,17 @@ def build_excel(src_bytes, bank_match, yyyymm, unmatched_deposits=None):
                 else:
                     ws_c.cell(r, 33).value = ag
                 matched += 1
+            elif gm:
+                # Best guess — red fill = ต้องตรวจสอบ
+                af, ag, btype = gm
+                ws_c.cell(r, 32).value = af
+                ws_c.cell(r, 32).fill  = fill_guess
+                ws_c.cell(r, 33).fill  = fill_guess
+                if isinstance(ag, datetime.datetime):
+                    ws_c.cell(r, 33).value = ag; ws_c.cell(r, 33).number_format = DATE_FMT
+                else:
+                    ws_c.cell(r, 33).value = ag
+                guessed += 1
             else:
                 ws_c.cell(r, 32).value = ''; ws_c.cell(r, 33).value = ''
                 unmatched_cells += 1
@@ -535,7 +561,7 @@ def build_excel(src_bytes, bank_match, yyyymm, unmatched_deposits=None):
     buf = io.BytesIO()
     wb_out.save(buf)
     buf.seek(0)
-    return buf.getvalue(), matched, unmatched_cells, len(data_rows), len(cont_rows)
+    return buf.getvalue(), matched, guessed, unmatched_cells, len(data_rows), len(cont_rows)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # STREAMLIT UI
@@ -713,27 +739,31 @@ if process_btn and apsx_file:
             if re_num and y_val and y_val > 0:
                 receipt_items.append((re_num, y_val, pay_ch))
 
-    bank_match, unmatched = auto_match(receipt_items, all_credits)
+    bank_match, guess_match, unmatched = auto_match(receipt_items, all_credits)
     override_parsed = parse_override(override_dict)
     bank_match.update(override_parsed)
+    # Remove overridden items from guess_match
+    for k in override_parsed: guess_match.pop(k, None)
     unmatched_final = [u for u in unmatched if (u['re'], u['amount']) not in bank_match]
 
     with st.spinner("Building Excel output..."):
-        out_bytes, matched, blank, total_rows, cont_rows = build_excel(
-            apsx_bytes, bank_match, yyyymm)
+        out_bytes, matched, guessed, blank, total_rows, cont_rows = build_excel(
+            apsx_bytes, bank_match, yyyymm, guess_match=guess_match)
 
     out_name = f"{yyyymm}_BKFL_Receipt Report.xlsx"
 
     st.header("3. ผลลัพธ์")
-    c1, c2, c3, c4 = st.columns(4)
+    c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("Data rows", total_rows)
     c2.metric("Sub-item rows zeroed", cont_rows)
     c3.metric("AF/AG filled ✓", matched)
-    c4.metric("Blank (unmatched) ⚠", blank)
+    c4.metric("Best guess 🟥 (ตรวจสอบ)", guessed)
+    c5.metric("Blank ⚠", blank)
 
     if unmatched_final:
         st.warning(f"⚠ **{len(unmatched_final)} รายการยังไม่ match** — AF/AG จะว่าง")
         rows_data = []
+        override_template = {}
         for u in unmatched_final:
             key = f"{u['re']}_{u['amount']}" if u['amount'] == int(u['amount']) else f"{u['re']}_{u['amount']}"
             rows_data.append({
@@ -742,13 +772,13 @@ if process_btn and apsx_file:
                 'ช่องทาง': u['channel'],
                 'ประเภทบัญชี': u['bank_type'],
                 'ยอดสุทธิ (ประมาณ)': round(u['expected_net'], 2),
-                'Key สำหรับ Override': key
             })
+            override_template[key] = [round(u['expected_net'], 2), "YYYY-MM-DD", u['bank_type']]
         st.dataframe(rows_data, use_container_width=True)
-        st.caption(
-            "💡 คัดลอก Key จากตารางด้านบน → วางใน Override box → กด Process อีกครั้ง\n\n"
-            "Format: `\"KEY\": [ยอดจริงจาก bank statement, \"YYYY-MM-DD\", \"BANK_TYPE\"]`"
-        )
+        st.markdown("**📋 คัดลอก JSON นี้ไปวางใน Override box** (กดปุ่ม Copy มุมขวาบน → แก้ยอดจริง + วันที่ → กด Process อีกครั้ง)")
+        template_str = json.dumps(override_template, ensure_ascii=False, indent=2)
+        st.code(template_str, language='json')
+        st.caption("ค่าที่ต้องแก้: **ยอดสุทธิ (ประมาณ)** → ใส่ยอดจริงจาก bank statement | **YYYY-MM-DD** → วันที่เงินเข้าจริง")
     elif blank > 0:
         st.warning(f"⚠ **{blank} รายการ AF/AG ว่าง** — bank PDF ยังไม่ครบ หรือช่องทางชำระไม่ระบุ\n\n"
                    "ถ้าแน่ใจว่า bank PDF ครบแล้ว ให้ใส่ข้อมูลใน Manual Override")
